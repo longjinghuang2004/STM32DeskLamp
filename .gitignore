@@ -1,35 +1,111 @@
-# 忽略 Keil 编译产生的中间文件和输出文件
+# =======================================================
+# 1. 操作系统与通用垃圾文件 (OS & General)
+# =======================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+
+# =======================================================
+# 2. STM32 / Keil MDK 专用忽略项
+# =======================================================
+# 编译产生的中间文件夹
 **/Listings/
 **/Objects/
 **/DebugConfig/
-**/*.uvguix.*
-**/*.uvoptx
-**/*.dep
-**/*.bak
-**/*.map
-**/*.o
-**/*.d
-**/*.crf
-**/*.iex
-**/*.htm
-**/*.sct
-**/*.lnp
-**/*.axf
-**/*.elf
+**/RTE/
 
-# 忽略 J-Link / ST-Link 生成的配置
+# Keil 工程产生的临时文件
+*.uvguix.*
+*.uvoptx
+*.dep
+*.d
+*.crf
+*.o
+*.axf
+*.elf
+*.iex
+*.htm
+*.sct
+*.lnp
+*.map
 JLinkLog.txt
 *.ini
 
-# 忽略 VS Code 配置 (可选)
-.vscode/
+# 批处理清理脚本 (可选，视情况保留或忽略)
+keilkill.bat
 
-# -------------------------------------------------
-# 关于你的需求 "只监控 Project" 的特别说明：
-# -------------------------------------------------
-# 你的 Library (标准库) 和 Start (启动文件) 也是代码运行必须的。
-# 如果你只上传 Project，别人下载后是无法编译的。
-# 所以建议保留 Library 和 Start。
-# 但如果你非常确定只要 Project，可以取消下面这行的注释：
- /stm32端智能台灯/Library/
- /stm32端智能台灯/Start/
+# =======================================================
+# 3. ESP32 / ESP-IDF 专用忽略项 (基于乐鑫官方)
+# =======================================================
+# 核心编译输出目录 (体积巨大，必须忽略)
+**/build/
+
+# 编译产物 (防止出现在根目录)
+*.bin
+*.out
+flasher_args.json
+
+# 依赖组件管理 (由 idf.py 自动下载)
+**/managed_components/
+**/dependencies.lock
+**/components/.idf/
+
+# Python 环境与缓存
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+venv/
+.venv/
+env/
+
+# CMake 生成文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+compile_commands.json
+
+# --- 核心配置文件的特殊处理 ---
+# 忽略旧的备份配置
+**/sdkconfig.old
+**/sdkconfig.ci
+
+# [重要决策] 关于 sdkconfig：
+# 乐鑫官方默认忽略 sdkconfig，建议使用 sdkconfig.defaults。
+# 但对于个人毕设项目，为了方便在不同电脑间同步配置(如Wi-Fi密码、Flash设置)，
+# 我建议 **保留(不忽略)** sdkconfig。
+# 如果你确实想忽略它，请取消下面这行的注释：
+# **/sdkconfig
+
+# =======================================================
+# 4. 编辑器与 IDE 缓存 (VS Code / Clangd)
+# =======================================================
+# C/C++ 插件生成的索引缓存 (体积大，必须忽略)
+**/.clangd/
+**/.cache/
+**/.ccls-cache/
+
+# VS Code 容器配置 (个人项目通常不需要)
+**/.devcontainer/
+
+# VS Code 局部配置 (包含本地路径，建议忽略)
+**/.vscode/
+
+# Visual Studio (如果用了的话)
+*.suo
+*.sln.docstates
+
+ESP32_Firmware_Code/ESP32_Firmware/.clangd
+ESP32_Firmware_Code/ESP32_Firmware/.gitignore
