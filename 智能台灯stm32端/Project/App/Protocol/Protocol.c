@@ -1,21 +1,15 @@
 /* App/Protocol/Protocol.c */
-/**
-  ******************************************************************************
-  * @file    Protocol.c
-  * @brief   通信协议层实现
-  ******************************************************************************
-  */
 #include "Protocol.h"
 #include "USART_DMA.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
 
-// --- 接收缓冲区 ---
-#define RX_BUF_SIZE 256
-static char s_RxBuf[RX_BUF_SIZE];
-static volatile uint16_t s_RxIndex = 0;
-static volatile uint8_t s_RxFrameReady = 0;
+// --- 应用层接收缓冲区 ---
+// 用于暂存从 DMA 搬运过来的数据流，直到凑齐一个完整的 JSON 包
+#define APP_RX_BUF_SIZE 512
+static char s_AppRxBuf[APP_RX_BUF_SIZE];
+static uint16_t s_AppRxLen = 0;
 
 // --- 回调函数 ---
 static Proto_ModeCallback_t s_ModeCb = NULL;
@@ -28,42 +22,16 @@ static int _CheckQoS(void)
     return 1;
 }
 
-void Protocol_Init(void)
+// --- 内部辅助：解析 JSON 指令 ---
+static void _ParseJsonCmd(char* json_str)
 {
-    s_RxIndex = 0;
-    s_RxFrameReady = 0;
-}
-
-void Protocol_OnRxData(uint8_t data)
-{
-    if (s_RxFrameReady) return;
-
-    if (data == '\n' || data == '\r')
-    {
-        if (s_RxIndex > 0)
-        {
-            s_RxBuf[s_RxIndex] = '\0';
-            s_RxFrameReady = 1;
-        }
-    }
-    else
-    {
-        if (s_RxIndex < RX_BUF_SIZE - 1) s_RxBuf[s_RxIndex++] = data;
-        else s_RxIndex = 0; // Overflow protection
-    }
-}
-
-void Protocol_Process(void)
-{
-    if (!s_RxFrameReady) return;
-
-    cJSON *root = cJSON_Parse(s_RxBuf);
+    cJSON *root = cJSON_Parse(json_str);
     if (root)
     {
         cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
         if (cJSON_IsString(cmd))
         {
-            // 1. 模式切换指令: {"cmd":"mode", "val":1}
+            // 1. 模式切换指令
             if (strcmp(cmd->valuestring, "mode") == 0)
             {
                 cJSON *val = cJSON_GetObjectItem(root, "val");
@@ -72,7 +40,7 @@ void Protocol_Process(void)
                     s_ModeCb((uint8_t)val->valueint);
                 }
             }
-            // 2. 灯光控制指令: {"cmd":"light", "warm":500, "cold":500}
+            // 2. 灯光控制指令
             else if (strcmp(cmd->valuestring, "light") == 0)
             {
                 cJSON *warm = cJSON_GetObjectItem(root, "warm");
@@ -88,24 +56,95 @@ void Protocol_Process(void)
     }
     else
     {
-        USART_DMA_Printf("[Proto] JSON Parse Error: %s\r\n", s_RxBuf);
+        USART_DMA_Printf("[Proto] JSON Parse Error: %s\r\n", json_str);
+    }
+}
+
+void Protocol_Init(void)
+{
+    s_AppRxLen = 0;
+    memset(s_AppRxBuf, 0, APP_RX_BUF_SIZE);
+}
+
+void Protocol_Process(void)
+{
+    // 1. 从 DMA 驱动层拉取新数据
+    uint8_t temp_buf[128];
+    uint16_t len = USART_DMA_ReadRxBuffer(temp_buf, sizeof(temp_buf));
+
+    if (len > 0)
+    {
+        // 防止缓冲区溢出
+        if (s_AppRxLen + len < APP_RX_BUF_SIZE)
+        {
+            memcpy(&s_AppRxBuf[s_AppRxLen], temp_buf, len);
+            s_AppRxLen += len;
+            s_AppRxBuf[s_AppRxLen] = '\0'; // 确保字符串结束符
+        }
+        else
+        {
+            // 溢出保护：清空缓冲区
+            s_AppRxLen = 0;
+            USART_DMA_Printf("[Proto] Buffer Overflow! Reset.\r\n");
+        }
     }
 
-    s_RxIndex = 0;
-    s_RxFrameReady = 0;
+    // 2. 检查是否包含完整的数据帧 (以 \n 结尾)
+    if (s_AppRxLen > 0)
+    {
+        char* newline_ptr = strchr(s_AppRxBuf, '\n');
+        
+        while (newline_ptr != NULL)
+        {
+            // 计算当前帧长度 (包含 \n)
+            int frame_len = (newline_ptr - s_AppRxBuf) + 1;
+            
+            // 提取帧内容 (临时修改 \n 为 \0 以便字符串处理)
+            *newline_ptr = '\0';
+            
+            // 如果有 \r 也去掉
+            if (frame_len > 1 && s_AppRxBuf[frame_len - 2] == '\r')
+            {
+                s_AppRxBuf[frame_len - 2] = '\0';
+            }
+
+            // 解析 JSON
+            if (strlen(s_AppRxBuf) > 0)
+            {
+                _ParseJsonCmd(s_AppRxBuf);
+            }
+
+            // 3. 移除已处理的数据 (滑动窗口)
+            int remaining = s_AppRxLen - frame_len;
+            if (remaining > 0)
+            {
+                memmove(s_AppRxBuf, &s_AppRxBuf[frame_len], remaining);
+                s_AppRxLen = remaining;
+                s_AppRxBuf[s_AppRxLen] = '\0';
+                
+                // 继续查找下一个 \n (处理粘包)
+                newline_ptr = strchr(s_AppRxBuf, '\n');
+            }
+            else
+            {
+                // 全部处理完毕
+                s_AppRxLen = 0;
+                newline_ptr = NULL;
+            }
+        }
+    }
 }
 
 void Protocol_SetModeCallback(Proto_ModeCallback_t cb) { s_ModeCb = cb; }
 void Protocol_SetLightCallback(Proto_LightCallback_t cb) { s_LightCb = cb; }
 
-/* --- 发送接口实现 --- */
+/* --- 发送接口实现 (保持不变) --- */
 
 void Protocol_Report_Encoder(int16_t diff)
 {
     USART_DMA_Printf("{\"ev\":\"enc\",\"diff\":%d}\r\n", diff);
 }
 
-// [修改] 增加 id 字段上报
 void Protocol_Report_Key(const char* name, const char* action)
 {
     USART_DMA_Printf("{\"ev\":\"key\",\"id\":\"%s\",\"act\":\"%s\"}\r\n", name, action);

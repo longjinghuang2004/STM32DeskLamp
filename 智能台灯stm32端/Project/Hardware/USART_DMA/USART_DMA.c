@@ -3,24 +3,30 @@
 #include <string.h>
 #include <stdio.h>
 
-// --- 内部变量 ---
+// --- 发送相关变量 ---
 static uint8_t  s_TxBuf[USART_DMA_TX_BUF_SIZE];
-static volatile uint16_t s_Head = 0; // 写入位置 (CPU)
-static volatile uint16_t s_Tail = 0; // 读取位置 (DMA)
-static volatile uint8_t  s_DmaBusy = 0;
-static volatile uint16_t s_LastSendLen = 0; // 记录DMA正在传输的长度
+static volatile uint16_t s_TxHead = 0; // 写入位置 (CPU)
+static volatile uint16_t s_TxTail = 0; // 读取位置 (DMA)
+static volatile uint8_t  s_DmaTxBusy = 0;
+static volatile uint16_t s_LastSendLen = 0;
+
+// --- 接收相关变量 ---
+static uint8_t  s_RxBuffer[USART_DMA_RX_BUF_SIZE]; // DMA 自动写入的循环缓冲区
+static volatile uint16_t s_RxReadIndex = 0;        // 软件读取位置
 
 // --- 内部函数声明 ---
-static void _CheckAndStartDMA(void);
+static void _CheckAndStartTxDMA(void);
 
 // --- 初始化 ---
 void USART_DMA_Init(void)
 {
+    // 1. 开启时钟
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1 | RCC_APB2Periph_GPIOA, ENABLE);
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
 
-    // PA9 TX
+    // 2. GPIO 配置
     GPIO_InitTypeDef GPIO_InitStructure;
+    // PA9 TX
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
@@ -31,6 +37,7 @@ void USART_DMA_Init(void)
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
+    // 3. USART 配置
     USART_InitTypeDef USART_InitStructure;
     USART_InitStructure.USART_BaudRate = USART_DMA_BAUDRATE;
     USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -40,72 +47,80 @@ void USART_DMA_Init(void)
     USART_InitStructure.USART_Mode = USART_Mode_Tx | USART_Mode_Rx;
     USART_Init(USART1, &USART_InitStructure);
 
-    USART_DMACmd(USART1, USART_DMAReq_Tx, ENABLE);
-    USART_ITConfig(USART1, USART_IT_RXNE, ENABLE); // 开启接收中断
-
-    // DMA1 Channel4 (USART1_TX)
-    DMA_InitTypeDef DMA_InitStructure;
+    // 4. DMA TX 配置 (DMA1_Channel4)
     DMA_DeInit(DMA1_Channel4);
+    DMA_InitTypeDef DMA_InitStructure;
     DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&USART1->DR;
     DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)s_TxBuf;
     DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralDST;
-    DMA_InitStructure.DMA_BufferSize = 0;
+    DMA_InitStructure.DMA_BufferSize = 0; // 初始为0
     DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
     DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
     DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
     DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
-    DMA_InitStructure.DMA_Mode = DMA_Mode_Normal;
+    DMA_InitStructure.DMA_Mode = DMA_Mode_Normal; // 发送用普通模式
     DMA_InitStructure.DMA_Priority = DMA_Priority_Medium;
     DMA_InitStructure.DMA_M2M = DMA_M2M_Disable;
     DMA_Init(DMA1_Channel4, &DMA_InitStructure);
 
-    DMA_ITConfig(DMA1_Channel4, DMA_IT_TC, ENABLE);
+    DMA_ITConfig(DMA1_Channel4, DMA_IT_TC, ENABLE); // 开启发送完成中断
 
+    // 5. DMA RX 配置 (DMA1_Channel5)
+    DMA_DeInit(DMA1_Channel5);
+    DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&USART1->DR;
+    DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)s_RxBuffer;
+    DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralSRC;
+    DMA_InitStructure.DMA_BufferSize = USART_DMA_RX_BUF_SIZE;
+    // 关键：接收使用循环模式
+    DMA_InitStructure.DMA_Mode = DMA_Mode_Circular; 
+    DMA_Init(DMA1_Channel5, &DMA_InitStructure);
+
+    // 6. 开启 DMA 通道和 USART DMA 请求
+    DMA_Cmd(DMA1_Channel5, ENABLE); // 立即开启接收 DMA
+    USART_DMACmd(USART1, USART_DMAReq_Tx | USART_DMAReq_Rx, ENABLE);
+
+    // 7. 中断优先级配置
     NVIC_InitTypeDef NVIC_InitStructure;
-    // DMA TX Interrupt
+    
+    // DMA TX 中断
     NVIC_InitStructure.NVIC_IRQChannel = DMA1_Channel4_IRQn;
     NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
     NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
     NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
     NVIC_Init(&NVIC_InitStructure);
 
-    // USART RX Interrupt
+    // USART1 全局中断 (仅用于处理错误，不处理接收)
     NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
     NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
     NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
     NVIC_Init(&NVIC_InitStructure);
 
+    // 8. 使能串口
     USART_Cmd(USART1, ENABLE);
     
-    s_Head = 0;
-    s_Tail = 0;
-    s_DmaBusy = 0;
+    // 初始化状态
+    s_TxHead = 0;
+    s_TxTail = 0;
+    s_DmaTxBusy = 0;
+    s_RxReadIndex = 0;
 }
 
-// --- 核心逻辑 ---
+// --- 发送逻辑 (保持不变) ---
 
-// 尝试启动 DMA (需在关中断或中断回调中调用)
-static void _CheckAndStartDMA(void)
+static void _CheckAndStartTxDMA(void)
 {
-    if (s_DmaBusy) return;      // DMA 忙
-    if (s_Head == s_Tail) return; // 无数据
+    if (s_DmaTxBusy) return;
+    if (s_TxHead == s_TxTail) return;
 
     uint16_t sendLen;
-    uint16_t head = s_Head;
-    uint16_t tail = s_Tail;
+    uint16_t head = s_TxHead;
+    uint16_t tail = s_TxTail;
 
-    // 计算连续数据块长度
-    if (head > tail)
-    {
-        sendLen = head - tail;
-    }
-    else
-    {
-        sendLen = USART_DMA_TX_BUF_SIZE - tail;
-    }
+    if (head > tail) sendLen = head - tail;
+    else sendLen = USART_DMA_TX_BUF_SIZE - tail;
 
-    s_LastSendLen = sendLen; // 记录本次发送长度
-    s_DmaBusy = 1;
+    s_LastSendLen = sendLen;
+    s_DmaTxBusy = 1;
 
     DMA_Cmd(DMA1_Channel4, DISABLE);
     DMA1_Channel4->CMAR = (uint32_t)&s_TxBuf[tail];
@@ -115,34 +130,30 @@ static void _CheckAndStartDMA(void)
 
 int USART_DMA_Send(uint8_t *data, uint16_t len)
 {
-    if (len == 0) return 0;
-    if (len > USART_DMA_TX_BUF_SIZE) return 0;
+    if (len == 0 || len > USART_DMA_TX_BUF_SIZE) return 0;
 
-    // 计算剩余空间
-    uint16_t head = s_Head;
-    uint16_t tail = s_Tail;
+    uint16_t head = s_TxHead;
+    uint16_t tail = s_TxTail;
     uint16_t used = (head >= tail) ? (head - tail) : (USART_DMA_TX_BUF_SIZE + head - tail);
     uint16_t free = USART_DMA_TX_BUF_SIZE - 1 - used;
 
-    if (len > free) return 0; // 缓冲区满，丢弃
+    if (len > free) return 0;
 
-    // 复制数据
     uint16_t chunk1 = USART_DMA_TX_BUF_SIZE - head;
     if (len <= chunk1)
     {
         memcpy(&s_TxBuf[head], data, len);
-        s_Head = (head + len) % USART_DMA_TX_BUF_SIZE;
+        s_TxHead = (head + len) % USART_DMA_TX_BUF_SIZE;
     }
     else
     {
         memcpy(&s_TxBuf[head], data, chunk1);
         memcpy(&s_TxBuf[0], data + chunk1, len - chunk1);
-        s_Head = len - chunk1;
+        s_TxHead = len - chunk1;
     }
 
-    // 启动 DMA (临界区保护)
     __disable_irq();
-    _CheckAndStartDMA();
+    _CheckAndStartTxDMA();
     __enable_irq();
 
     return 1;
@@ -162,47 +173,71 @@ int USART_DMA_Printf(const char *fmt, ...)
 
 uint8_t USART_DMA_GetUsage(void)
 {
-    uint16_t head = s_Head;
-    uint16_t tail = s_Tail;
+    uint16_t head = s_TxHead;
+    uint16_t tail = s_TxTail;
     uint16_t used = (head >= tail) ? (head - tail) : (USART_DMA_TX_BUF_SIZE + head - tail);
     return (uint8_t)((uint32_t)used * 100 / USART_DMA_TX_BUF_SIZE);
 }
 
-// --- [关键修复] 重定向 fputc ---
-// 这使得 PAJ7620.c 等旧代码中的 printf() 能够正常工作，而不会导致 HardFault
 int fputc(int ch, FILE *f)
 {
     uint8_t c = (uint8_t)ch;
-    // 尝试发送，如果缓冲区满则丢弃（防止阻塞死机）
     USART_DMA_Send(&c, 1);
     return ch;
 }
 
+// --- 接收逻辑 (新增) ---
+
+uint16_t USART_DMA_ReadRxBuffer(uint8_t *output_buf, uint16_t max_len)
+{
+    uint16_t bytes_read = 0;
+    
+    // 计算 DMA 当前写到了哪里 (Head)
+    // CNDTR 是递减的，所以：Head = 总大小 - 剩余大小
+    uint16_t write_index = USART_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel5);
+    
+    // 如果读指针 != 写指针，说明有新数据
+    while (s_RxReadIndex != write_index && bytes_read < max_len)
+    {
+        output_buf[bytes_read++] = s_RxBuffer[s_RxReadIndex];
+        
+        s_RxReadIndex++;
+        if (s_RxReadIndex >= USART_DMA_RX_BUF_SIZE)
+        {
+            s_RxReadIndex = 0;
+        }
+    }
+    
+    return bytes_read;
+}
+
 // --- 中断处理 ---
 
+// TX DMA 完成中断
 void DMA1_Channel4_IRQHandler(void)
 {
     if (DMA_GetITStatus(DMA1_IT_TC4))
     {
         DMA_ClearITPendingBit(DMA1_IT_TC4);
-
-        // 更新 Tail
-        s_Tail = (s_Tail + s_LastSendLen) % USART_DMA_TX_BUF_SIZE;
-        s_DmaBusy = 0;
-
-        // 检查是否还有剩余数据 (接力发送)
-        _CheckAndStartDMA();
+        s_TxTail = (s_TxTail + s_LastSendLen) % USART_DMA_TX_BUF_SIZE;
+        s_DmaTxBusy = 0;
+        _CheckAndStartTxDMA();
     }
 }
 
-// 接收中断钩子
-extern void Protocol_OnRxData(uint8_t data);
-
+// USART1 错误处理中断 (防止 ORE 导致死机)
 void USART1_IRQHandler(void)
 {
-    if (USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+    volatile uint8_t clear_temp;
+    
+    if (USART_GetFlagStatus(USART1, USART_FLAG_ORE) != RESET ||
+        USART_GetFlagStatus(USART1, USART_FLAG_NE) != RESET ||
+        USART_GetFlagStatus(USART1, USART_FLAG_FE) != RESET ||
+        USART_GetFlagStatus(USART1, USART_FLAG_PE) != RESET)
     {
-        uint8_t data = (uint8_t)USART_ReceiveData(USART1);
-        Protocol_OnRxData(data); // 喂给协议层
+        // 读取 SR 和 DR 清除错误
+        clear_temp = USART1->SR;
+        clear_temp = USART1->DR;
+        (void)clear_temp;
     }
 }
