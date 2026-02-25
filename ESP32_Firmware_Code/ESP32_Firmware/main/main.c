@@ -2,62 +2,56 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "esp_http_client.h"
-#include "esp_crt_bundle.h"
 
-// 引入模块头文件
 #include "manager/mgr_wifi.h"
 #include "dev_audio.h"
 #include "app_config.h"
+#include "agents/agent_baidu_asr.h" // 引入新组件
 
 static const char *TAG = "MAIN";
 
-// 硬编码配置 (后续可改为 BLE 配网)
 #define MY_WIFI_SSID      "CMCC-2079"
 #define MY_WIFI_PASS      "88888888"
 
-// --- HTTPS 测试任务 (保持不变，用于验证封装是否成功) ---
-esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
-    if (evt->event_id == HTTP_EVENT_ON_DATA && !esp_http_client_is_chunked_response(evt->client)) {
-        printf("%.*s", evt->data_len, (char*)evt->data);
-    }
-    return ESP_OK;
-}
-
-void https_test_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Waiting for Time Sync...");
-    
-    // 1. 阻塞等待时间同步 (使用封装好的接口)
-    while (!Mgr_Wifi_IsTimeSynced()) {
+void asr_test_task(void *pvParameters) {
+    // 1. 等待网络
+    while (Mgr_Wifi_GetStatus() != WIFI_STATUS_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    ESP_LOGI(TAG, "Time Synced! Starting HTTPS...");
+    ESP_LOGI(TAG, "WiFi Connected. Init ASR...");
 
-    // 2. 发起请求
-    esp_http_client_config_t config = {
-        .url = "https://httpbin.org/get",
-        .event_handler = _http_event_handler,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    esp_err_t err = esp_http_client_perform(client);
+    // 2. 初始化 ASR (获取 Token)
+    Agent_ASR_Init();
 
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "HTTPS Status = %d", esp_http_client_get_status_code(client));
-    } else {
-        ESP_LOGE(TAG, "HTTPS Failed: %s", esp_err_to_name(err));
+    while (1) {
+        ESP_LOGI(TAG, ">>> Press ENTER to start recording (Simulated by 5s delay) <<<");
+        vTaskDelay(pdMS_TO_TICKS(3000)); // 倒计时
+
+        ESP_LOGI(TAG, ">>> Recording 5 seconds... Speak Now! <<<");
+        
+        // 3. 启动识别 (设置最大 60秒，但我们会在 5秒后手动停止)
+        // 注意：Agent_ASR_Run_Session 是阻塞的，直到 Agent_ASR_Stop 被调用或超时
+        // 为了测试，我们这里直接让它录满 5 秒 (通过修改 Run_Session 内部逻辑或传入 5000)
+        // 这里我们传入 5000ms 进行测试
+        char *text = Agent_ASR_Run_Session(5000);
+
+        if (text) {
+            ESP_LOGW(TAG, "### ASR Result: [%s] ###", text);
+            free(text);
+        } else {
+            ESP_LOGE(TAG, "ASR Failed.");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
-    esp_http_client_cleanup(client);
-    vTaskDelete(NULL);
 }
 
 void app_main(void) {
     ESP_LOGI(TAG, "System Start...");
 
-    // 1. 初始化 Wi-Fi 管理器
+    // 初始化
     Mgr_Wifi_Init();
-
-    // 2. 初始化音频驱动 (注入配置)
+    
     Audio_Config_t audio_cfg = {
         .bck_io_num = AUDIO_I2S_BCK_PIN,
         .ws_io_num = AUDIO_I2S_WS_PIN,
@@ -66,9 +60,8 @@ void app_main(void) {
     };
     Dev_Audio_Init(&audio_cfg);
 
-    // 3. 启动连接
     Mgr_Wifi_Connect(MY_WIFI_SSID, MY_WIFI_PASS);
 
-    // 4. 创建业务任务 (这里暂时是测试任务)
-    xTaskCreate(https_test_task, "https_test", 8192, NULL, 5, NULL);
+    // 创建 ASR 测试任务
+    xTaskCreate(asr_test_task, "asr_test", 8192, NULL, 5, NULL);
 }

@@ -1,6 +1,10 @@
+# components/3_Service/CMakeLists.txt
+
 idf_component_register(
     SRCS "src/manager/mgr_wifi.c"
-         # "src/service_core.c" # 暂时注释，还没写
+         "src/agents/agent_baidu_asr.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_event nvs_flash lwip esp_netif # 依赖网络栈
+    # 添加 2_Device 到依赖列表
+    REQUIRES esp_wifi esp_event nvs_flash lwip esp_netif esp_http_client json mbedtls 2_Device
 )
+
