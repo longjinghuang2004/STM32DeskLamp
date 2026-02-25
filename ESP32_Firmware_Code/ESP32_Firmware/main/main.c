@@ -1,96 +1,74 @@
-#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "nvs_flash.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 
-// 引入组件
-#include "KeyManager.h"
-#include "bsp_led.h"
+// 引入模块头文件
+#include "manager/mgr_wifi.h"
+#include "dev_audio.h"
+#include "app_config.h"
 
 static const char *TAG = "MAIN";
 
-// --- 引脚定义 ---
-#define PIN_TEST_BUTTON     21  // 杜邦线接的按钮
-#define PIN_WS2812          48  // 板载 RGB 灯 (v1.0)，v1.1时将引脚改为38
+// 硬编码配置 (后续可改为 BLE 配网)
+#define MY_WIFI_SSID      "CMCC-2079"
+#define MY_WIFI_PASS      "88888888"
 
-// --- 按键对象 ---
-static Key_t s_TestKey;
-
-// --- 定时器回调 (每 20ms 运行一次) ---
-// 相当于 STM32 的 SysTick 或 TIM 中断
-static void key_scan_timer_callback(void* arg)
-{
-    // 核心状态机 (非阻塞)
-    KeyManager_Tick();
+// --- HTTPS 测试任务 (保持不变，用于验证封装是否成功) ---
+esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+    if (evt->event_id == HTTP_EVENT_ON_DATA && !esp_http_client_is_chunked_response(evt->client)) {
+        printf("%.*s", evt->data_len, (char*)evt->data);
+    }
+    return ESP_OK;
 }
 
-void app_main(void)
-{
+void https_test_task(void *pvParameters) {
+    ESP_LOGI(TAG, "Waiting for Time Sync...");
+    
+    // 1. 阻塞等待时间同步 (使用封装好的接口)
+    while (!Mgr_Wifi_IsTimeSynced()) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_LOGI(TAG, "Time Synced! Starting HTTPS...");
+
+    // 2. 发起请求
+    esp_http_client_config_t config = {
+        .url = "https://httpbin.org/get",
+        .event_handler = _http_event_handler,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = esp_http_client_perform(client);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "HTTPS Status = %d", esp_http_client_get_status_code(client));
+    } else {
+        ESP_LOGE(TAG, "HTTPS Failed: %s", esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+    vTaskDelete(NULL);
+}
+
+void app_main(void) {
     ESP_LOGI(TAG, "System Start...");
 
-    // 1. 初始化 LED
-    BSP_LED_Init(PIN_WS2812);
-    BSP_LED_SetColor(0, 20, 0); // 亮个绿灯表示启动成功
-    vTaskDelay(pdMS_TO_TICKS(500));
-    BSP_LED_SetColor(0, 0, 0);
+    // 1. 初始化 Wi-Fi 管理器
+    Mgr_Wifi_Init();
 
-    // 2. 初始化按键管理器
-    KeyManager_Init();
-
-    // 3. 注册按键 (GPIO 21, 低电平有效)
-    // 注意：Key_Init 内部会自动调用 Key_HAL_Init_Pin 配置 GPIO
-    Key_Init(&s_TestKey, 0, PIN_TEST_BUTTON, 0); 
-    KeyManager_Register(&s_TestKey);
-
-    // 4. 启动高精度定时器 (替代 STM32 的 SysTick)
-    const esp_timer_create_args_t timer_args = {
-        .callback = &key_scan_timer_callback,
-        .name = "key_scan"
+    // 2. 初始化音频驱动 (注入配置)
+    Audio_Config_t audio_cfg = {
+        .bck_io_num = AUDIO_I2S_BCK_PIN,
+        .ws_io_num = AUDIO_I2S_WS_PIN,
+        .data_in_num = AUDIO_I2S_DATA_IN_PIN,
+        .sample_rate = AUDIO_SAMPLE_RATE
     };
-    esp_timer_handle_t timer_handle;
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer_handle));
-    // 周期性启动，单位微秒 (20ms = 20000us)
-    ESP_ERROR_CHECK(esp_timer_start_periodic(timer_handle, 20000));
+    Dev_Audio_Init(&audio_cfg);
 
-    ESP_LOGI(TAG, "Key Scanner Started. Press Button on GPIO 21...");
+    // 3. 启动连接
+    Mgr_Wifi_Connect(MY_WIFI_SSID, MY_WIFI_PASS);
 
-    // 5. 主循环 (消费事件)
-    KeyEvent_t evt;
-    while (1) {
-        // 轮询获取事件 (KeyManager 内部有缓冲)
-        if (KeyManager_GetEvent(&evt)) {
-            
-            ESP_LOGI(TAG, "Key Event: ID=%d, Type=%d", (int)evt.Mask, (int)evt.Type);
-
-            switch (evt.Type) {
-                case KEY_EVT_CLICK:
-                    ESP_LOGI(TAG, ">> Single Click: Toggle Red Light");
-                    BSP_LED_Toggle();
-                    break;
-
-                case KEY_EVT_DOUBLE_CLICK:
-                    ESP_LOGI(TAG, ">> Double Click: Blue Light");
-                    BSP_LED_SetColor(0, 0, 50);
-                    break;
-
-                case KEY_EVT_HOLD_START:
-                    ESP_LOGI(TAG, ">> Hold Start: White Light");
-                    BSP_LED_SetColor(20, 20, 20);
-                    break;
-                
-                case KEY_EVT_HOLD_END:
-                    ESP_LOGI(TAG, ">> Hold End: Off");
-                    BSP_LED_SetColor(0, 0, 0);
-                    break;
-
-                default:
-                    break;
-            }
-        }
-
-        // 这里的延时决定了主循环处理事件的响应速度
-        // 10ms 足够快，且能让出 CPU 给 Wi-Fi 等任务
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+    // 4. 创建业务任务 (这里暂时是测试任务)
+    xTaskCreate(https_test_task, "https_test", 8192, NULL, 5, NULL);
 }
