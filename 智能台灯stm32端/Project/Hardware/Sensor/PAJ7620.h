@@ -67,4 +67,9 @@ void PAJ7620_Hook_OnWave(void);
  */
 void PAJ7620_Hook_OnProximity(uint8_t brightness);
 
+/**
+ * @brief [新增] 退出近距控制模式回调
+ */
+void PAJ7620_Hook_OnProximityExit(void);
+
 #endif

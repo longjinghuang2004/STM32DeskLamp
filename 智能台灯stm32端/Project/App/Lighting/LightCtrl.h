@@ -22,4 +22,7 @@ uint16_t LightCtrl_GetColorTemp(void);
 // 周期性任务 (处理节流上报)
 void LightCtrl_Task(void);
 
+// [新增] 强制上报当前灯光状态 (用于无极调光结束时同步)
+void LightCtrl_ForceReport(void);
+
 #endif

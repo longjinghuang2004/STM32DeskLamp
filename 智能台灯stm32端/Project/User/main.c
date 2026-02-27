@@ -2,8 +2,9 @@
 /**
   ******************************************************************************
   * @file    main.c
-  * @brief   主程序 (V13.0 KeyManager Integration)
+  * @brief   主程序 (V13.1 Proximity Sync Fix)
   * @note    集成 KeyManager V2.0，支持多键、连击与长按
+  *          修复无极调光结束后状态不同步的问题
   ******************************************************************************
   */
 #include "stm32f10x.h"
@@ -51,6 +52,11 @@ void PAJ7620_Hook_OnProximity(uint8_t brightness) {
     Control_OnProximity(brightness);
 }
 
+// [新增] 退出无极调光回调
+void PAJ7620_Hook_OnProximityExit(void) {
+    Control_OnProximityExit();
+}
+
 /* ============================================================
  *      硬件初始化辅助函数
  * ============================================================ */
@@ -78,7 +84,7 @@ int main(void)
     Delay_ms(100); // 等待电源稳定
     USART_DMA_Init();
     
-    printf("\r\n=== Smart Lamp System V13.0 (KeyManager) ===\r\n");
+    printf("\r\n=== Smart Lamp System V13.1 (Proximity Sync Fix) ===\r\n");
 
     // 2. 数据模型初始化 (必须最先)
     SystemModel_Init();

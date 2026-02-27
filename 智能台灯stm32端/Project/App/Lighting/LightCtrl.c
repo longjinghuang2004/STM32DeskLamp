@@ -1,8 +1,7 @@
 /**
   ******************************************************************************
   * @file    LightCtrl.c
-  * @brief   灯光控制业务逻辑 (V6.2 Fixed)
-  * @note    恢复使用 g_SystemModel 作为唯一真理来源，确保 UI 同步
+  * @brief   灯光控制业务逻辑 (V6.3 Force Report Support)
   ******************************************************************************
   */
 #include "LightCtrl.h"
@@ -26,13 +25,12 @@ static int16_t _Clamp(int16_t val, int16_t min, int16_t max) {
     return val;
 }
 
-// 将模型数据应用到硬件 (核心算法，与初始代码一致)
+// 将模型数据应用到硬件
 static void _ApplyModelToHardware(void) {
     uint16_t warm, cold;
     float bri_factor = g_SystemModel.Light.Brightness / 1000.0f;
     float cct_factor = g_SystemModel.Light.ColorTemp / 1000.0f;
 
-    // 初始代码的算法逻辑
     warm = (uint16_t)((1.0f - cct_factor) * 1000 * bri_factor);
     cold = (uint16_t)(cct_factor * 1000 * bri_factor);
 
@@ -46,7 +44,6 @@ static void _ApplyModelToHardware(void) {
 
 void LightCtrl_Init(void) {
     LED_Init();
-    // 初始值已在 SystemModel_Init 中设置，这里只需应用
     _ApplyModelToHardware();
 }
 
@@ -78,18 +75,13 @@ void LightCtrl_SetRawPWM(uint16_t warm, uint16_t cold) {
     s_CurrCold = cold;
     
     // 2. 反向更新模型 (近似值)，确保 UI 显示正确
-    // 总亮度 = 暖 + 冷
     uint32_t total = warm + cold;
     if (total > 1000) total = 1000;
     
     g_SystemModel.Light.Brightness = (int16_t)total;
     
-    // 色温 = 冷光占比
     if (total > 0) {
         g_SystemModel.Light.ColorTemp = (int16_t)((cold * 1000) / total);
-    } else {
-        // 亮度为0时，保持原有色温或设为默认
-        // g_SystemModel.Light.ColorTemp 保持不变
     }
     
     // 远程设置通常不需要回传 State，避免死循环
@@ -105,4 +97,10 @@ void LightCtrl_Task(void) {
         Protocol_Report_State(s_CurrWarm, s_CurrCold);
         s_IsDirty = 0;
     }
+}
+
+// [新增] 强制上报当前灯光状态
+void LightCtrl_ForceReport(void) {
+    Protocol_Report_State(s_CurrWarm, s_CurrCold);
+    s_IsDirty = 0; // 上报后清除脏标记，避免重复上报
 }

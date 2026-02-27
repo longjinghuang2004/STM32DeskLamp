@@ -1,8 +1,8 @@
 /**
   ******************************************************************************
   * @file    PAJ7620.c
-  * @brief   PAJ7620U2 驱动 (V10.1 Fixed Macros)
-  * @note    修复宏定义命名不一致问题，包含反向手势滤波
+  * @brief   PAJ7620U2 驱动 (V10.2 Exit Hook)
+  * @note    增加退出无极调光的回调
   ******************************************************************************
   */
 #include "PAJ7620.h"
@@ -170,6 +170,9 @@ void PAJ7620_Process_StateMachine(void)
                 // 退出时设置上一次动作为 FORWARD，防止误触 BACKWARD
                 s_LastGesture = PAJ7620_GESTURE_FORWARD;
                 s_LastGestureTick = now;
+                
+                // [新增] 触发退出回调
+                PAJ7620_Hook_OnProximityExit();
             }
             else {
                 PAJ7620_Hook_OnProximity(data.ObjectBrightness);
@@ -189,3 +192,4 @@ __weak void PAJ7620_Hook_OnClockwise(void) {}
 __weak void PAJ7620_Hook_OnCounterClockwise(void) {}
 __weak void PAJ7620_Hook_OnWave(void) {}
 __weak void PAJ7620_Hook_OnProximity(uint8_t brightness) {}
+__weak void PAJ7620_Hook_OnProximityExit(void) {} // [新增]

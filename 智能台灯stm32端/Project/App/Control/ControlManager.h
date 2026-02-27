@@ -21,7 +21,11 @@ void Control_OnKey(const char* key_name, const char* action);
 void Control_OnGesture(uint8_t gesture);
 void Control_OnProximity(uint8_t brightness);
 
+// [新增] 退出无极调光事件
+void Control_OnProximityExit(void);
+
 // 状态查询
 uint8_t Control_GetFocus(void); // 0:Bri, 1:CCT
 
 #endif
+

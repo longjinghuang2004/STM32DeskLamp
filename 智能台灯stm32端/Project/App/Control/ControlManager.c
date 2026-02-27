@@ -2,8 +2,8 @@
 /**
   ******************************************************************************
   * @file    ControlManager.c
-  * @brief   业务逻辑控制器 (V13.0 KeyManager Support)
-  * @note    适配新的按键事件流
+  * @brief   业务逻辑控制器 (V13.1 Proximity Sync Fix)
+  * @note    修复无极调光结束后状态不同步的问题
   ******************************************************************************
   */
 #include "ControlManager.h"
@@ -80,32 +80,23 @@ void Control_OnEncoder(int16_t diff) {
     }
 }
 
-// [修改] 适配新的事件流
 void Control_OnKey(const char* key_name, const char* action) {
-    
-    // 1. 优先上报事件 (透传)
     Protocol_Report_Key(key_name, action);
 
-    // 2. 本地业务逻辑处理
     if (strcmp(key_name, "ModeSW") == 0) 
     {
-        // 长按开始
         if (strcmp(action, "hold") == 0) {
             s_IsLongPressing = 1;
             USART_DMA_Printf("[Ctrl] Long Press START (ColorTemp Mode)\r\n");
         }
-        // 长按结束
         else if (strcmp(action, "release") == 0) {
             s_IsLongPressing = 0;
-            // 长按结束后，通常重置回亮度模式，或者保持当前状态
             g_SystemModel.Light.Focus = FOCUS_BRIGHTNESS;
             USART_DMA_Printf("[Ctrl] Long Press END\r\n");
         }
-        // 三连击 -> 切换控制模式
         else if (strcmp(action, "triple") == 0) {
             Control_ToggleMode();
         }
-        // 单击 -> 切换焦点 (亮度/色温)
         else if (strcmp(action, "click") == 0) {
             if (g_SystemModel.Light.Focus == FOCUS_BRIGHTNESS) {
                 g_SystemModel.Light.Focus = FOCUS_COLOR_TEMP;
@@ -115,10 +106,9 @@ void Control_OnKey(const char* key_name, const char* action) {
                 USART_DMA_Printf("[Ctrl] Focus -> Bri\r\n");
             }
         }
-        // 双击 -> 重置灯光 (中性光 50%)
         else if (strcmp(action, "double") == 0) {
             if (s_Mode == CTRL_MODE_LOCAL) {
-                LightCtrl_SetRawPWM(250, 250); // 500总亮度，500色温
+                LightCtrl_SetRawPWM(250, 250); 
                 USART_DMA_Printf("[Ctrl] Reset (Double Click)\r\n");
             }
         }
@@ -203,6 +193,19 @@ void Control_OnProximity(uint8_t brightness) {
         
         LightCtrl_SetRawPWM(warm, cold);
     }
+}
+
+// [新增] 退出无极调光时的处理
+void Control_OnProximityExit(void) {
+    if (s_Mode != CTRL_MODE_LOCAL) return;
+    
+    // 解除锁定状态
+    s_ProxLocked = 0;
+    
+    // 强制上报最终的灯光状态给 ESP32
+    LightCtrl_ForceReport();
+    
+    USART_DMA_Printf("[Ctrl] Local: Exit Proximity Mode & Report State\r\n");
 }
 
 void Control_Task(void) {
