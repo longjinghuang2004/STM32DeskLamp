@@ -25,6 +25,7 @@ typedef struct {
 typedef struct {
     int8_t  indoor_temp;    /*!< 室内温度 (摄氏度) */
     uint8_t indoor_hum;     /*!< 室内湿度 (%) */
+    uint16_t indoor_lux;    /*!< [新增] 室内光照强度 (0-1000) */
     char    outdoor_weather[32]; /*!< 室外天气描述 (如 "晴", "多云") */
     int8_t  outdoor_temp;   /*!< 室外温度 */
 } DC_EnvData_t;

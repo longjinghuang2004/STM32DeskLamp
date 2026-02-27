@@ -78,6 +78,7 @@ void Agent_LampMind_Chat_Task(void *pvParameters) {
     cJSON *env_obj = cJSON_CreateObject();
     cJSON_AddNumberToObject(env_obj, "temp", env.indoor_temp);
     cJSON_AddNumberToObject(env_obj, "humi", env.indoor_hum);
+    cJSON_AddNumberToObject(env_obj, "lux", env.indoor_lux); // [新增] 上报光照
     cJSON_AddItemToObject(state_obj, "environment", env_obj);
 
     cJSON_AddItemToObject(req_json, "state", state_obj);
@@ -130,7 +131,13 @@ void Agent_LampMind_Chat_Task(void *pvParameters) {
                             cJSON *cct_item = cJSON_GetObjectItem(action_item, "color_temp");
                             if (cct_item) light_data.color_temp = cct_item->valueint;
                             
-                            light_data.power = true;
+                            // [修复] 如果亮度为0，自动视为关灯
+                            if (light_data.brightness == 0) {
+                                light_data.power = false;
+                            } else {
+                                light_data.power = true;
+                            }
+                            
                             DataCenter_Set_Lighting(&light_data);
                             ESP_LOGI(TAG, "Action executed: Light updated");
                         } 

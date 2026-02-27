@@ -29,12 +29,13 @@ void DataCenter_Init(void) {
     xSemaphoreTake(s_Mutex, portMAX_DELAY);
     
     // 赋予合理的初始默认值
-    s_DataTree.lighting.power = false;
+    s_DataTree.lighting.power = true; // 默认开灯状态，方便调试
     s_DataTree.lighting.brightness = 50;
     s_DataTree.lighting.color_temp = 50; // 中性光
 
     s_DataTree.env.indoor_temp = 25;
     s_DataTree.env.indoor_hum = 50;
+    s_DataTree.env.indoor_lux = 0; // [新增]
     strcpy(s_DataTree.env.outdoor_weather, "未知");
     s_DataTree.env.outdoor_temp = 0;
 
@@ -54,8 +55,8 @@ void DataCenter_PrintStatus(void) {
     APP_LOGI(TAG, "=== Data Center Status ===");
     APP_LOGI(TAG, "[Light] Power:%d, Bri:%d%%, CCT:%d%%", 
              s_DataTree.lighting.power, s_DataTree.lighting.brightness, s_DataTree.lighting.color_temp);
-    APP_LOGI(TAG, "[Env]   InTemp:%dC, InHum:%d%%, OutWeather:%s, OutTemp:%dC", 
-             s_DataTree.env.indoor_temp, s_DataTree.env.indoor_hum, 
+    APP_LOGI(TAG, "[Env]   InTemp:%dC, InHum:%d%%, InLux:%d, OutWeather:%s, OutTemp:%dC", 
+             s_DataTree.env.indoor_temp, s_DataTree.env.indoor_hum, s_DataTree.env.indoor_lux,
              s_DataTree.env.outdoor_weather, s_DataTree.env.outdoor_temp);
     APP_LOGI(TAG, "[Timer] State:%d, Remain:%lu s", 
              s_DataTree.timer.state, s_DataTree.timer.remain_sec);
@@ -132,3 +133,4 @@ void DataCenter_Set_Timer(const DC_TimerData_t *in_data) {
     xSemaphoreGive(s_Mutex);
     if (changed) EventBus_Send(EVT_DATA_TIMER_CHANGED, NULL, 0);
 }
+
